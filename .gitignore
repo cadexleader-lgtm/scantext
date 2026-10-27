@@ -1,0 +1,6 @@
+node_modules
+dist
+# Généré par scripts/copy-ocr-assets.mjs depuis node_modules
+public/tesseract
+e2e/.out
+*.tsbuildinfo

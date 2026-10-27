@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --color-brand-50: #eff4ff;
+  --color-brand-100: #dbe6fe;
+  --color-brand-200: #bfd3fe;
+  --color-brand-500: #3b6cf6;
+  --color-brand-600: #2453e0;
+  --color-brand-700: #1d43c4;
+  --color-brand-800: #1e3a8a;
+  --color-brand-900: #172b66;
+  --color-ink: #0f172a;
+  --color-muted: #475569;
+  --color-line: #e2e8f0;
+  --color-canvas: #f8fafc;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-family: var(--font-sans);
+    overscroll-behavior-y: none;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+  button,
+  [role="button"],
+  a {
+    touch-action: manipulation;
+  }
+  /* Champs à 16 px minimum : évite le zoom automatique de Safari iPhone */
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+  dialog {
+    color: inherit;
+  }
+  dialog::backdrop {
+    background: rgb(15 23 42 / 0.45);
+  }
+  body:has(dialog[open]) {
+    overflow: hidden;
+  }
+}
+
+@layer components {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .editor-area {
+    font-family: Georgia, "Times New Roman", serif;
+    line-height: 1.65;
+    field-sizing: content;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes flash {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.animate-flash {
+  animation: flash 280ms ease-out forwards;
+}
