@@ -90,3 +90,30 @@ describe("reconstruction des paragraphes", () => {
     expect(buildLayout([], 10, 10).paragraphs).toEqual([]);
   });
 });
+
+describe("ordre de lecture", () => {
+  const blk = (lines: ReturnType<typeof line>[]): TessBlock => ({ bbox: { x0: 0, y0: 0, x1: 1000, y1: 1000 }, paragraphs: [{ bbox: { x0: 0, y0: 0, x1: 1000, y1: 1000 }, lines }] });
+
+  it("recolle les morceaux d'une même ligne rangés dans des blocs différents", () => {
+    // Tesseract a sorti la fin de la ligne 1 avant son début, dans un autre bloc
+    const layout = buildLayout(
+      [blk([line(100, 20, 195, ["Objectives"])]), blk([line(102, 20, 100, ["1.", "Course"]), line(140, 20, 100, ["Helping", "students", "move"])])],
+      1000,
+      1000,
+    );
+    expect(layoutToText(layout)).toBe("1. Course Objectives\nHelping students move");
+  });
+
+  it("puce lue comme « . » ou « « » → « • »", () => {
+    const l1 = line(100, 20, 100, [".", "Understand", "the", "key", "ideas"]);
+    l1.words[0].bbox.x1 = l1.words[0].bbox.x0 + 5; // marque très étroite
+    const layout = buildLayout([blk([l1])], 1000, 1000);
+    expect(layoutToText(layout)).toBe("• Understand the key ideas");
+  });
+
+  it("deux vraies colonnes restent séparées (pas de mélange des lignes)", () => {
+    const left = blk([line(100, 20, 50, ["Gauche", "un"]), line(130, 20, 50, ["Gauche", "deux"])]);
+    const right = blk([line(100, 20, 600, ["Droite", "un"]), line(130, 20, 600, ["Droite", "deux"])]);
+    expect(layoutToText(buildLayout([left, right], 1000, 1000))).toBe("Gauche un\nGauche deux\n\nDroite un\nDroite deux");
+  });
+});

@@ -455,6 +455,27 @@ await test("Photo en perspective importée : recadrage automatique + OCR", async
   await context.close();
 });
 
+await test("Feuille sur tissu gris clair (fond proche du papier) : recadrage + OCR", async () => {
+  const { context, page } = await newPage();
+  await chooseFiles(page, () => button(page, "Importer des photos").click(), [fx("photo-fabric.jpg")]);
+  await page.waitForURL(/#\/doc\//);
+  await waitOcrDone(page, 120_000);
+  const [p] = await dbPages(page, docIdFromUrl(page));
+  assert(p.quad, "contours non détectés");
+  // la feuille occupe le centre de la photo : aucun coin ne doit être collé au bord de l'image
+  const margin = Math.min(...p.quad.flatMap((c) => [c.x, c.y, p.origW - c.x, p.origH - c.y])) / Math.max(p.origW, p.origH);
+  assert(margin > 0.03, `cadre collé au bord de l'image (marge ${(margin * 100).toFixed(1)} %) : le fond n'a pas été exclu`);
+  const ratio = p.procH / p.procW;
+  assert(Math.abs(ratio - 1754 / 1240) < 0.08, `proportions après redressement : ${ratio.toFixed(2)} (attendu ≈ 1,41)`);
+  const t = norm(p.text);
+  assert(t.includes("Les membres ont approuvé le budget prévisionnel") && t.includes("137,50"), `OCR : « ${t.slice(0, 200)} »`);
+  await page.goto(`${BASE}#/doc/${docIdFromUrl(page)}/page/${p.id}`);
+  await page.getByRole("img", { name: "Page 1" }).waitFor();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(SHOTS, "page-fabric-corrected.png") });
+  await context.close();
+});
+
 await camBrowser.close();
 
 // ---------------------------------------------------------------- mobile étroit + boutons

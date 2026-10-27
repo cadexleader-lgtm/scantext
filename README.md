@@ -42,10 +42,10 @@ La caméra n'est accessible que dans un **contexte sécurisé** : `https://` ou 
 **Terminé et testé**
 
 - Accueil : nouveau document, scanner avec la caméra, importer des photos, importer un PDF, documents récents (nombre de pages + statut).
-- **Scan caméra multi-pages** : flux continu sans revenir à l'accueil, détection des contours en direct, écran de vérification (filtres, rotation, netteté, recadrage manuel avec loupe), « Valider · page suivante », miniatures, visionneuse « Page précédente / suivante / Reprendre / Supprimer », lampe torche si disponible, mode « Scan rapide » sans vérification.
+- **Scan caméra multi-pages** : flux continu sans revenir à l'accueil (le traitement d'image et l'OCR attendent la fermeture du scanner pour ne pas ralentir la caméra), détection des contours en direct, écran de vérification (filtres, rotation, netteté, recadrage manuel avec loupe), « Valider · page suivante », miniatures, visionneuse « Page précédente / suivante / Reprendre / Supprimer », lampe torche si disponible, mode « Scan rapide » sans vérification.
 - **Repli sans caméra** (refus d'autorisation, caméra absente ou occupée, site non HTTPS) : message clair + appareil photo natif du téléphone + import de photos.
-- **Traitement d'image** (Web Worker) : détection automatique de la feuille, **correction de perspective avec estimation des vraies proportions** (une page A4 photographiée de biais reste au format A4), filtres Document / Gris / Noir & blanc / Couleur, suppression des ombres.
-- **OCR réel** (Tesseract.js 7, WebAssembly, local) : français, anglais ou les deux ; paragraphes reconstruits d'après la géométrie des lignes ; mode « Tableaux et formulaires » qui conserve les lignes ; statuts En attente / En cours / Terminé / Erreur / À vérifier ; progression « 8 pages sur 20 traitées » ; pause / reprise ; relance d'une seule page ; reprise automatique après fermeture ou rechargement ; écran maintenu allumé pendant le traitement ; pages vides et résultats incertains signalés (aucun texte inventé).
+- **Traitement d'image** (Web Worker) : détection automatique de la feuille **par ses contours** (le texte est d'abord effacé par une fermeture morphologique, puis les longs bords droits sont cherchés par transformée de Hough ; chaque cadre candidat est noté selon la présence réelle d'un bord sur ses 4 côtés — fonctionne aussi sur un fond clair ou texturé), **correction de perspective avec estimation des vraies proportions** (une page A4 photographiée de biais reste au format A4), filtres Document / Gris / Noir & blanc / Couleur, suppression des ombres.
+- **OCR réel** (Tesseract.js 7, WebAssembly, local) : français, anglais ou les deux ; ordre de lecture et paragraphes reconstruits d'après la géométrie (morceaux d'une même ligne recollés, colonnes conservées, puces « • » reconnues) ; mode « Tableaux et formulaires » qui conserve les lignes ; statuts En attente / En cours / Terminé / Erreur / À vérifier ; progression « 8 pages sur 20 traitées » ; pause / reprise ; relance d'une seule page ; reprise automatique après fermeture ou rechargement ; écran maintenu allumé pendant le traitement ; pages vides et résultats incertains signalés (aucun texte inventé).
 - **PDF importés** : rendu des pages ; si le PDF contient déjà du texte, choix « Utiliser le texte du PDF » (exact) ou « Refaire l'OCR ».
 - **Pages** : réordonner (flèches, glisser-déposer sur ordinateur), insérer avant/après ou n'importe où, supprimer, recadrer/filtrer après coup, reprendre la photo.
 - **Éditeur** : mode *Texte continu* (toutes les pages à la suite, repères masquables) et mode *Par page* (image et texte côte à côte sur ordinateur, onglets sur téléphone) ; recherche insensible aux accents, remplacer / tout remplacer ; mots incertains surlignés.
@@ -156,7 +156,7 @@ Points d'attention :
 
 **Application**
 
-- Détection des contours : fiable pour une feuille claire sur un fond plus sombre ; sur un fond clair (table blanche), elle échoue proprement (l'image entière est gardée) et le recadrage manuel est proposé.
+- Détection des contours : s'appuie sur les bords droits de la feuille. Une page très courbée (livre épais), pliée, ou dont un bord est caché par la main peut être mal cadrée : le recadrage manuel (coins déplaçables avec loupe) reste disponible. Sans bord net, l'image entière est gardée plutôt qu'un cadre inventé.
 - La correction des proportions suppose une photo non recadrée (centre optique au centre de l'image).
 - PDF exportés : police standard Helvetica — les caractères hors alphabet latin (grec, cyrillique, arabe, chinois…) sont remplacés par « ? » (signalé dans la fenêtre d'export). Le TXT et le DOCX ne sont pas concernés.
 - PDF recherchable : pour une page corrigée à la main, la couche de texte reprend les corrections mais sa position sur l'image est approximative.
@@ -167,11 +167,11 @@ Points d'attention :
 
 ## Tests
 
-### Tests unitaires — `npm test` (42 tests, Vitest)
+### Tests unitaires — `npm test` (50 tests, Vitest)
 
-Géométrie (homographie, quadrilatère, **proportions réelles en perspective**), détection de document sur photo synthétique, perspective/rotation/filtres, assemblage du texte et recollage des lignes, recherche sans accents, noms de fichiers, règles OCR (jamais écraser une correction), reconstruction des paragraphes, exports TXT/DOCX/PDF/PDF recherchable générés puis relus, store IndexedDB (captures simultanées, insertion, déplacement, suppression, corrections persistées, reprise après interruption, duplication).
+Géométrie (homographie, quadrilatère, **proportions réelles en perspective**), détection de document sur photos synthétiques (fond sombre, **tissu clair texturé, table presque blanche, tableau dans la page, feuille plus large que le cadre, absence de feuille**), ordre de lecture (morceaux recollés, colonnes, puces), perspective/rotation/filtres, assemblage du texte et recollage des lignes, recherche sans accents, noms de fichiers, règles OCR (jamais écraser une correction), reconstruction des paragraphes, exports TXT/DOCX/PDF/PDF recherchable générés puis relus, store IndexedDB (captures simultanées, insertion, déplacement, suppression, corrections persistées, reprise après interruption, duplication).
 
-### Tests de bout en bout — 18 scénarios dans Chromium
+### Tests de bout en bout — 19 scénarios dans Chromium
 
 ```bash
 npm run build
@@ -198,6 +198,7 @@ Les scénarios tournent sur la **version de production** (service worker actif),
 | 13 | Caméra refusée : message + 3 solutions de repli, import de repli fonctionnel | ✅ |
 | — | **Scan caméra** 3 captures (dont recadrage manuel), visionneuse précédent/suivant, suppression, contours détectés, proportions A4 retrouvées, texte reconnu | ✅ |
 | — | Photo en perspective importée : recadrage auto, proportions, OCR | ✅ |
+| — | Feuille sur tissu gris clair (fond proche du papier) : cadre sans le fond, proportions A4, OCR — échouait avant la détection par contours | ✅ |
 | 14 | Page blanche → « Page vide », image de bruit → vide ou « À vérifier », aucun texte inventé | ✅ |
 | 15 + 17 | Écran 360 px : aucun défilement horizontal sur 5 écrans, aucun bouton sans nom accessible | ✅ |
 | 16 | Hors ligne : rechargement sans réseau, documents visibles, **nouvel OCR hors ligne**, export DOCX hors ligne | ✅ |

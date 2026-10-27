@@ -192,7 +192,7 @@ export function PageScreen({ docId, pageId }: { docId: string; pageId: string })
                     Recadrer, filtres
                   </Button>
                   <Button icon={<Camera className="size-5" aria-hidden />} onClick={() => navigate(paths.scan(docId, { replace: page.id }))}>
-                    Reprendre la photo
+                    Reprendre
                   </Button>
                   <Button icon={<Images className="size-5" aria-hidden />} onClick={() => setInsert(index)}>
                     Insérer avant

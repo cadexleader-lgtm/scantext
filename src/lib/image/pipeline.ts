@@ -1,5 +1,6 @@
 import type { ImageParams, Quad } from "../types";
-import { detectDocument, rgbaToGray } from "./detect";
+import { rgbaToGray } from "./detect";
+import { findPage } from "./edges";
 import { insetQuad, scaleQuad } from "./geometry";
 import { processImage, type RGBAImage } from "./ops";
 
@@ -118,13 +119,13 @@ export function pixelsToCanvas(img: RGBAImage, target?: HTMLCanvasElement): HTML
 }
 
 /** Détecte les coins du document sur une source, dans le repère de cette source. */
-export function detectQuad(src: DrawableSource, workSide = 360): Quad | null {
+export function detectQuad(src: DrawableSource, workSide = 400): Quad | null {
   const { w, h } = sourceSize(src);
   if (!w || !h) return null;
   const small = drawScaled(src, workSide);
   try {
     const px = readPixels(small);
-    const res = detectDocument(rgbaToGray(px.data, px.width, px.height), px.width, px.height);
+    const res = findPage(rgbaToGray(px.data, px.width, px.height), px.width, px.height);
     if (!res) return null;
     return insetQuad(scaleQuad(res.quad, w / small.width, h / small.height), 0.006);
   } finally {
@@ -190,7 +191,17 @@ export interface ProcessedImage {
   h: number;
 }
 
-const THUMB_SIDE = 360;
+export const THUMB_SIDE = 360;
+
+/** Petite vignette JPEG (évite de décoder l'image complète pour chaque miniature). */
+export async function makeThumb(src: DrawableSource): Promise<Blob> {
+  const c = drawScaled(src, THUMB_SIDE);
+  try {
+    return await canvasToBlob(c, "image/jpeg", 0.72);
+  } finally {
+    releaseCanvas(c);
+  }
+}
 
 /** Rendu final d'une page à partir de son image d'origine. */
 export async function renderPage(origBlob: Blob, params: ImageParams, maxSide: number): Promise<ProcessedImage> {

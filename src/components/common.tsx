@@ -5,14 +5,21 @@ import { STATUS_LABEL } from "../lib/doc-stats";
 import type { PageRecord } from "../lib/types";
 import { cn } from "./ui/cn";
 
-/** URL d'objet pour une image stockée (révoquée automatiquement). */
-export function useBlobUrl(pageId: string | undefined, kind: BlobKind, rev: number | string): string | null {
+/** URL d'objet pour une image stockée (révoquée automatiquement) ; `kind` peut lister des replis. */
+export function useBlobUrl(pageId: string | undefined, kind: BlobKind | BlobKind[], rev: number | string): string | null {
   const [url, setUrl] = useState<string | null>(null);
+  const kinds = (Array.isArray(kind) ? kind : [kind]).join(",");
   useEffect(() => {
     if (!pageId) return;
     let cancelled = false;
     let created: string | null = null;
-    void getBlob(pageId, kind).then((b) => {
+    void (async () => {
+      for (const k of kinds.split(",") as BlobKind[]) {
+        const b = await getBlob(pageId, k);
+        if (b) return b;
+      }
+      return undefined;
+    })().then((b) => {
       if (cancelled || !b) return;
       created = URL.createObjectURL(b);
       setUrl(created);
@@ -22,7 +29,7 @@ export function useBlobUrl(pageId: string | undefined, kind: BlobKind, rev: numb
       if (created) URL.revokeObjectURL(created);
       setUrl(null);
     };
-  }, [pageId, kind, rev]);
+  }, [pageId, kinds, rev]);
   return url;
 }
 
@@ -51,7 +58,7 @@ export function StatusBadge({ page, className }: { page: PageRecord; className?:
 }
 
 export function PageThumb({ page, className }: { page: PageRecord; className?: string }) {
-  const thumb = useBlobUrl(page.id, page.imageStatus === "ready" ? "thumb" : "orig", `${page.imageStatus}-${page.imageRev}`);
+  const thumb = useBlobUrl(page.id, ["thumb", "orig"], `${page.imageStatus}-${page.imageRev}`);
   return (
     <div className={cn("relative overflow-hidden rounded-lg bg-slate-100 ring-1 ring-line", className)}>
       {thumb ? (

@@ -1,6 +1,6 @@
 import type { Worker as TessWorker, LoggerMessage } from "tesseract.js";
 import type { LayoutMode, OcrLang, OcrLayout } from "../types";
-import { buildLayout, layoutToText, layoutToTextWithSpacing, wordStats, type TessBlock } from "./layout";
+import { buildLayout, layoutToText, layoutToTextSpaced, wordStats, type TessBlock } from "./layout";
 
 /**
  * Moteur OCR local (Tesseract.js, WebAssembly, dans un Web Worker).
@@ -157,14 +157,7 @@ export async function recognizeImage(
     const { data } = await Promise.race([job, aborted]);
     const blocks = (data.blocks ?? []) as unknown as TessBlock[];
     const layout = buildLayout(blocks, opts.width, opts.height);
-    let text: string;
-    if (opts.layoutMode === "table") {
-      const raw = new Map<string, string>();
-      for (const b of blocks) for (const p of b.paragraphs) for (const l of p.lines) raw.set([l.bbox.x0, l.bbox.y0, l.bbox.x1, l.bbox.y1].join(","), l.text);
-      text = layoutToTextWithSpacing(layout, raw);
-    } else {
-      text = layoutToText(layout);
-    }
+    let text = opts.layoutMode === "table" ? layoutToTextSpaced(layout) : layoutToText(layout);
     text = text.trim();
     const stats = wordStats(layout);
     const blank = stats.count === 0 || !text;

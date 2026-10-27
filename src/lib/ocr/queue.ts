@@ -63,6 +63,26 @@ function orderedPages(): PageRecord[] {
 const paramsOf = (p: PageRecord): ImageParams => ({ quad: p.quad, rotation: p.rotation, filter: p.filter, sharpen: p.sharpen });
 const sameParams = (a: ImageParams, b: ImageParams) => JSON.stringify(a) === JSON.stringify(b);
 
+// ------------------------------------------------------------------ suspension
+
+/** Raisons de suspension en cours (ex. « scanner » : caméra ouverte). */
+const suspended = new Set<string>();
+const isSuspended = () => suspended.size > 0;
+
+/**
+ * Suspend (ou reprend) le traitement en arrière-plan. La page en cours de
+ * reconnaissance est interrompue puis reprise plus tard, depuis le début.
+ */
+export function suspendProcessing(reason: string, on: boolean): void {
+  if (on) {
+    suspended.add(reason);
+    if (ocrRunning) abortOcr();
+  } else {
+    suspended.delete(reason);
+    kick();
+  }
+}
+
 // ------------------------------------------------------------------ images
 
 let imageRunning = false;
@@ -72,6 +92,7 @@ async function imageLoop(): Promise<void> {
   imageRunning = true;
   try {
     for (;;) {
+      if (isSuspended()) break;
       const page = orderedPages().find((p) => p.imageStatus === "pending");
       if (!page) break;
       const params = paramsOf(page);
@@ -120,12 +141,12 @@ function nextOcrPage(): PageRecord | undefined {
 }
 
 async function ocrLoop(): Promise<void> {
-  if (ocrRunning || getSettings().ocrPaused || pstate.engineError) return;
+  if (ocrRunning || getSettings().ocrPaused || pstate.engineError || isSuspended()) return;
   if (!nextOcrPage()) return;
   ocrRunning = true;
   await acquireWakeLock();
   try {
-    while (!getSettings().ocrPaused) {
+    while (!getSettings().ocrPaused && !isSuspended()) {
       const page = nextOcrPage();
       if (!page) break;
       const doc = getState().docs[page.docId];

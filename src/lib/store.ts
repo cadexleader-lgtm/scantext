@@ -293,6 +293,8 @@ export async function duplicateDoc(docId: string): Promise<DocRecord | undefined
 export interface NewPageInput {
   source: PageSource;
   orig: { blob: Blob; w: number; h: number };
+  /** Vignette provisoire (remplacée par celle de l'image traitée). */
+  thumb?: Blob;
   params: ImageParams;
   /** Image déjà traitée (sinon elle sera préparée en arrière-plan). */
   processed?: { blob: Blob; thumb: Blob; w: number; h: number };
@@ -359,6 +361,8 @@ export function addPages(docId: string, inputs: NewPageInput[], atIndex?: number
       if (input.processed) {
         blobs.push([db.blobKey(id, "proc"), input.processed.blob]);
         blobs.push([db.blobKey(id, "thumb"), input.processed.thumb]);
+      } else if (input.thumb) {
+        blobs.push([db.blobKey(id, "thumb"), input.thumb]);
       }
     });
     const ids = [...doc.pageIds];
@@ -436,6 +440,7 @@ export async function replacePageImage(
   pageId: string,
   orig: { blob: Blob; w: number; h: number },
   params: ImageParams,
+  thumb?: Blob,
 ): Promise<void> {
   const page = state.pages[pageId];
   if (!page) return;
@@ -454,7 +459,9 @@ export async function replacePageImage(
     ocrError: null,
     updatedAt: Date.now(),
   };
-  await persist(() => db.putPageWithBlobs(doc, [next], [[db.blobKey(pageId, "orig"), orig.blob]]));
+  const blobs: Array<[string, Blob]> = [[db.blobKey(pageId, "orig"), orig.blob]];
+  if (thumb) blobs.push([db.blobKey(pageId, "thumb"), thumb]);
+  await persist(() => db.putPageWithBlobs(doc, [next], blobs));
   setState({ ...state, pages: { ...state.pages, [pageId]: { ...(state.pages[pageId] ?? next), ...next, text: state.pages[pageId]?.text ?? next.text } } });
 }
 

@@ -63,6 +63,17 @@ async function shot(browser, html, file, { width = 1240, height = 1754, type = "
       <div style="position:absolute;inset:0;background:linear-gradient(110deg,rgba(0,0,0,.25),rgba(0,0,0,0) 45%,rgba(255,255,255,.08))"></div>
     </body></html>`;
   await shot(browser, photoHtml(1500, 2000), path.join(OUT, "photo-perspective.jpg"), { width: 1500, height: 2000, type: "jpeg", quality: 90 });
+  // feuille posée sur un tissu gris clair moucheté (fond proche du papier : cas difficile)
+  const fabricHtml = (w, h) => `<html><body style="margin:0;width:${w}px;height:${h}px;overflow:hidden;background:#b9b9b6;perspective:1500px">
+      <svg width="${w}" height="${h}" style="position:absolute;inset:0"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3"/>
+        <feColorMatrix type="matrix" values="0 0 0 0 0.78  0 0 0 0 0.78  0 0 0 0 0.76  0 0 0 1.6 -0.3"/></filter>
+        <rect width="100%" height="100%" filter="url(#n)"/></svg>
+      <img src="data:image/png;base64,${pagePng}" style="position:absolute;left:52%;top:53%;width:${w * 0.7}px;
+        transform:translate(-50%,-50%) rotateX(12deg) rotateY(-6deg) rotateZ(3deg);box-shadow:0 12px 30px rgba(0,0,0,.35)">
+      <div style="position:absolute;inset:0;background:radial-gradient(circle at 80% 90%,rgba(0,0,0,.18),rgba(0,0,0,0) 60%)"></div>
+    </body></html>`;
+  await shot(browser, fabricHtml(1200, 1600), path.join(OUT, "photo-fabric.jpg"), { width: 1200, height: 1600, type: "jpeg", quality: 88 });
+
   // flux caméra simulé (MJPEG = images JPEG concaténées), format portrait
   await shot(browser, photoHtml(960, 1280), path.join(OUT, "camera-frame.jpg"), { width: 960, height: 1280, type: "jpeg", quality: 92 });
   const frame = fs.readFileSync(path.join(OUT, "camera-frame.jpg"));

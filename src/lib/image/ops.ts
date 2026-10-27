@@ -194,7 +194,8 @@ export function normalizeBackground(gray: Uint8ClampedArray, w: number, h: numbe
 
 /** Seuillage adaptatif (méthode de Bradley) par image intégrale. */
 export function adaptiveThreshold(gray: Uint8ClampedArray, w: number, h: number, t = 0.15): Uint8ClampedArray {
-  const integral = new Float64Array((w + 1) * (h + 1));
+  // somme max = 255 × pixels : tient en 32 bits jusqu'à 16 Mpx
+  const integral = w * h < 16_000_000 ? new Uint32Array((w + 1) * (h + 1)) : new Float64Array((w + 1) * (h + 1));
   for (let y = 0; y < h; y++) {
     let rowSum = 0;
     for (let x = 0; x < w; x++) {

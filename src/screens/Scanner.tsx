@@ -7,11 +7,12 @@ import { openPicker } from "../components/ImportHost";
 import { Button, IconButton } from "../components/ui";
 import { cn } from "../components/ui/cn";
 import { confirmAction } from "../components/ui/dialogs";
-import { detectDocument, rgbaToGray } from "../lib/image/detect";
+import { rgbaToGray } from "../lib/image/detect";
+import { findPage } from "../lib/image/edges";
 import { fullQuad } from "../lib/image/geometry";
 import { drawScaled, readPixels, releaseCanvas } from "../lib/image/pipeline";
 import { prepareCapture } from "../lib/import";
-import { kick } from "../lib/ocr/queue";
+import { kick, suspendProcessing } from "../lib/ocr/queue";
 import { goBack, navigate, paths } from "../lib/router";
 import { getSettings } from "../lib/settings";
 import { addPages, createDoc, getState, removePages, replacePageImage, useStore } from "../lib/store";
@@ -22,7 +23,7 @@ type CameraState = "starting" | "live" | "denied" | "unavailable" | "busy" | "in
 
 interface Review {
   source: PreviewSource;
-  orig: { blob: Blob; w: number; h: number };
+  orig: { blob: Blob; w: number; h: number; thumb: Blob };
   params: ImageParams;
 }
 
@@ -81,7 +82,8 @@ export function ScannerScreen({ docId: initialDocId, at, replacePageId }: { docI
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 2560 }, height: { ideal: 1440 } },
+          // 1920×1080 : assez pour lire une page A4, sans saturer un téléphone modeste
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
         });
       } catch (err) {
         if (cameraError(err) !== "unavailable") throw err;
@@ -101,6 +103,13 @@ export function ScannerScreen({ docId: initialDocId, at, replacePageId }: { docI
       setCamera(cameraError(err));
     }
   }, [stopCamera]);
+
+  // la caméra, le traitement d'image et l'OCR en même temps saturent un téléphone :
+  // les pages scannées sont traitées dès la fermeture du scanner
+  useEffect(() => {
+    suspendProcessing("scanner", true);
+    return () => suspendProcessing("scanner", false);
+  }, []);
 
   useEffect(() => {
     void startCamera();
@@ -137,22 +146,25 @@ export function ScannerScreen({ docId: initialDocId, at, replacePageId }: { docI
     }
     const small = document.createElement("canvas");
     let prev: Quad | null = null;
+    let busy = false;
     const timer = setInterval(() => {
       const v = videoRef.current;
-      if (!v || !v.videoWidth) return;
-      const scale = 220 / Math.max(v.videoWidth, v.videoHeight);
+      if (!v || !v.videoWidth || busy || document.visibilityState !== "visible") return;
+      busy = true;
+      const scale = 200 / Math.max(v.videoWidth, v.videoHeight);
       small.width = Math.round(v.videoWidth * scale);
       small.height = Math.round(v.videoHeight * scale);
       const ctx = small.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return;
+      if (!ctx) return void (busy = false);
       ctx.drawImage(v, 0, 0, small.width, small.height);
       const px = readPixels(small);
-      const res = detectDocument(rgbaToGray(px.data, px.width, px.height), px.width, px.height);
+      const res = findPage(rgbaToGray(px.data, px.width, px.height), px.width, px.height);
+      busy = false;
       const q = res ? (res.quad.map((p) => ({ x: p.x / scale, y: p.y / scale })) as Quad) : null;
       // lissage pour éviter que le cadre ne tremble
       prev = q && prev ? (q.map((p, i) => ({ x: prev![i].x * 0.5 + p.x * 0.5, y: prev![i].y * 0.5 + p.y * 0.5 })) as Quad) : q;
       setLiveQuad(prev);
-    }, 350);
+    }, 600);
     return () => {
       clearInterval(timer);
       releaseCanvas(small);
@@ -171,7 +183,7 @@ export function ScannerScreen({ docId: initialDocId, at, replacePageId }: { docI
   async function savePage(orig: Review["orig"], params: ImageParams) {
     const docId = await ensureDoc();
     if (retake && getState().pages[retake]) {
-      await replacePageImage(retake, orig, params);
+      await replacePageImage(retake, orig, params, orig.thumb);
       const replaced = retake;
       setRetake(null);
       kick();
@@ -182,7 +194,7 @@ export function ScannerScreen({ docId: initialDocId, at, replacePageId }: { docI
       }
       return;
     }
-    const [page] = await addPages(docId, [{ source: "camera", orig, params }], insertAt.current);
+    const [page] = await addPages(docId, [{ source: "camera", orig, thumb: orig.thumb, params }], insertAt.current);
     if (insertAt.current !== undefined) insertAt.current++;
     setSessionIds((ids) => [...ids, page.id]);
     kick();
@@ -202,10 +214,10 @@ export function ScannerScreen({ docId: initialDocId, at, replacePageId }: { docI
       const cap = await prepareCapture(frame);
       const params: ImageParams = { quad: cap.quad, rotation: 0, filter: getSettings().defaultFilter, sharpen: false };
       if (getSettings().quickCapture) {
-        await savePage({ blob: cap.blob, w: cap.w, h: cap.h }, params);
+        await savePage({ blob: cap.blob, w: cap.w, h: cap.h, thumb: cap.thumb }, params);
       } else {
         const canvas = drawScaled(frame, 1100);
-        setReview({ source: { canvas, w: cap.w, h: cap.h, url: URL.createObjectURL(cap.blob) }, orig: { blob: cap.blob, w: cap.w, h: cap.h }, params });
+        setReview({ source: { canvas, w: cap.w, h: cap.h, url: URL.createObjectURL(cap.blob) }, orig: { blob: cap.blob, w: cap.w, h: cap.h, thumb: cap.thumb }, params });
         setCropping(false);
         if (videoRef.current) videoRef.current.pause();
       }
@@ -285,7 +297,9 @@ export function ScannerScreen({ docId: initialDocId, at, replacePageId }: { docI
         <div className="min-w-0 flex-1 text-center">
           <p className="font-semibold">{retake ? `Reprendre la page ${nextPageNumber}` : `Page ${nextPageNumber}`}</p>
           <p className="text-sm text-white/75">
-            {sessionIds.length ? `${sessionIds.length} page${sessionIds.length > 1 ? "s" : ""} scannée${sessionIds.length > 1 ? "s" : ""}` : "Cadrez la page entière"}
+            {sessionIds.length
+              ? `${sessionIds.length} page${sessionIds.length > 1 ? "s" : ""} scannée${sessionIds.length > 1 ? "s" : ""} · texte reconnu après le scan`
+              : "Cadrez la page entière"}
           </p>
         </div>
         {torch !== null ? (

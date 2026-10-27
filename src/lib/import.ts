@@ -1,4 +1,4 @@
-import { detectQuad, drawScaled, canvasToBlob, decodeImage, releaseCanvas, releaseSource } from "./image/pipeline";
+import { detectQuad, drawScaled, canvasToBlob, decodeImage, makeThumb, releaseCanvas, releaseSource } from "./image/pipeline";
 import { getSettings, QUALITY_MAX_SIDE } from "./settings";
 import { addPages, createDoc, getState, type NewPageInput } from "./store";
 import { errorMessage } from "./toast";
@@ -23,7 +23,7 @@ export const isImage = (f: File) => f.type.startsWith("image/") || /\.(jpe?g|png
 export async function prepareCapture(
   canvas: HTMLCanvasElement,
   opts: { detect?: boolean; quad?: Quad | null } = {},
-): Promise<{ blob: Blob; w: number; h: number; quad: Quad | null }> {
+): Promise<{ blob: Blob; thumb: Blob; w: number; h: number; quad: Quad | null }> {
   const maxSide = QUALITY_MAX_SIDE[getSettings().imageQuality];
   const scaled = canvas.width > maxSide || canvas.height > maxSide ? drawScaled(canvas, maxSide) : canvas;
   try {
@@ -32,7 +32,8 @@ export async function prepareCapture(
     if (opts.quad === undefined && opts.detect !== false) quad = detectQuad(scaled);
     else if (quad && s !== 1) quad = quad.map((p) => ({ x: p.x * s, y: p.y * s })) as Quad;
     const blob = await canvasToBlob(scaled, "image/jpeg", 0.9);
-    return { blob, w: scaled.width, h: scaled.height, quad };
+    const thumb = await makeThumb(scaled);
+    return { blob, thumb, w: scaled.width, h: scaled.height, quad };
   } finally {
     if (scaled !== canvas) releaseCanvas(scaled);
   }
@@ -67,6 +68,7 @@ export async function importImages(
       const input: NewPageInput = {
         source: "image",
         orig: { blob: cap.blob, w: cap.w, h: cap.h },
+        thumb: cap.thumb,
         params: { quad: cap.quad, rotation: 0, filter, sharpen: false },
       };
       await addPages(docId, [input], at);
@@ -119,12 +121,14 @@ export async function importPdf(
         canvas = await renderPdfPage(pdf, n, maxSide);
         const text = opts.useText ? await extractPageText(pdf, n) : null;
         const blob = await canvasToBlob(canvas, "image/jpeg", 0.9);
+        const thumb = await makeThumb(canvas);
         await addPages(
           docId,
           [
             {
               source: "pdf",
               orig: { blob, w: canvas.width, h: canvas.height },
+              thumb,
               params: { quad: null, rotation: 0, filter: "color", sharpen: false },
               pdfText: text,
               // page sans texte dans un PDF « mixte » (page scannée) : reconnaissance OCR
