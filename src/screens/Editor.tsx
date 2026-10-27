@@ -334,10 +334,10 @@ export function EditorScreen({ docId, initialPageId }: { docId: string; initialP
               />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className={cn("sm:sticky sm:top-24 sm:self-start", mobileView !== "image" && "max-sm:hidden")}>
+              <div className={cn("min-w-0 sm:sticky sm:top-24 sm:self-start", mobileView !== "image" && "max-sm:hidden")}>
                 <PageImage page={current} className="max-h-[75dvh]" />
               </div>
-              <div className={cn("rounded-2xl bg-white p-3 shadow-sm ring-1 ring-line", mobileView !== "text" && "max-sm:hidden")}>
+              <div className={cn("min-w-0 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-line", mobileView !== "text" && "max-sm:hidden")}>
                 <PageTextBlock ref={register(current.id)} page={current} index={safeIndex} />
               </div>
             </div>

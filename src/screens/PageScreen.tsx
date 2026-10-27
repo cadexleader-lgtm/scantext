@@ -44,7 +44,13 @@ function ImageEditor({ page, onDone }: { page: PageRecord; onDone: () => void })
     void getBlob(page.id, "orig").then((b) => setOrig(b ?? null));
   }, [page.id]);
   const source = usePreviewSource(orig);
-  const [params, setParams] = useState<ImageParams>({ quad: page.quad, rotation: page.rotation, filter: page.filter, sharpen: page.sharpen });
+  const [params, setParams] = useState<ImageParams>({
+    quad: page.quad,
+    rotation: page.rotation,
+    filter: page.filter,
+    sharpen: page.sharpen,
+    straighten: page.straighten !== false,
+  });
   const [cropping, setCropping] = useState(false);
   const preview = useProcessedPreview(source, params);
 
@@ -176,7 +182,7 @@ export function PageScreen({ docId, pageId }: { docId: string; pageId: string })
           />
         </div>
         <div className="grid gap-4 md:grid-cols-2">
-          <section className={cn(view !== "image" && "max-md:hidden")} aria-label="Image de la page">
+          <section className={cn("min-w-0", view !== "image" && "max-md:hidden")} aria-label="Image de la page">
             {editing ? (
               <ImageEditor page={page} onDone={() => setEditing(false)} />
             ) : (
@@ -208,7 +214,7 @@ export function PageScreen({ docId, pageId }: { docId: string; pageId: string })
             )}
           </section>
 
-          <section className={cn("rounded-2xl bg-white p-3 shadow-sm ring-1 ring-line", view !== "text" && "max-md:hidden")}>
+          <section className={cn("min-w-0 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-line", view !== "text" && "max-md:hidden")}>
             {canHighlight && (
               <label className="mb-2 flex cursor-pointer items-center gap-2 text-sm text-muted">
                 <input type="checkbox" checked={highlight} onChange={(e) => setHighlight(e.target.checked)} className="size-4 accent-brand-700" />

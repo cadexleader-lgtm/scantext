@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { getBlob } from "../db";
-import { renderPage } from "../image/pipeline";
+import { PROC_VERSION } from "../image/ops";
+import { prepareOcrInput, renderPage } from "../image/pipeline";
 import { getSettings, QUALITY_MAX_SIDE, updateSettings } from "../settings";
 import { getState, savePageImage, subscribe, updatePage } from "../store";
 import { errorMessage, toast } from "../toast";
@@ -60,7 +61,13 @@ function orderedPages(): PageRecord[] {
   return out;
 }
 
-const paramsOf = (p: PageRecord): ImageParams => ({ quad: p.quad, rotation: p.rotation, filter: p.filter, sharpen: p.sharpen });
+const paramsOf = (p: PageRecord): ImageParams => ({
+  quad: p.quad,
+  rotation: p.rotation,
+  filter: p.filter,
+  sharpen: p.sharpen,
+  straighten: p.straighten !== false,
+});
 const sameParams = (a: ImageParams, b: ImageParams) => JSON.stringify(a) === JSON.stringify(b);
 
 // ------------------------------------------------------------------ suspension
@@ -157,7 +164,10 @@ async function ocrLoop(): Promise<void> {
       try {
         const blob = await getBlob(page.id, "proc");
         if (!blob) throw new Error("Image de la page introuvable sur l'appareil.");
-        const out = await recognizeImage(blob, {
+        setP({ ocrStatusText: "Préparation de l'image…" });
+        const input = await prepareOcrInput(blob);
+        if (isSuspended() || getSettings().ocrPaused) throw new OcrAbortedError();
+        const out = await recognizeImage(input, {
           lang: doc.lang,
           layoutMode: doc.layoutMode,
           width: page.procW,
@@ -247,7 +257,8 @@ export function retryEngine(): void {
 export async function rerunOcr(pageId: string): Promise<void> {
   const page = getState().pages[pageId];
   if (!page) return;
-  if (page.imageStatus === "error") {
+  // image produite par une ancienne version du traitement (sans redressement…) : la refaire
+  if (page.imageStatus === "error" || (page.imageStatus === "ready" && (page.procVersion ?? 1) < PROC_VERSION)) {
     await updatePage(pageId, { imageStatus: "pending", imageError: null, ocrStatus: "pending", ocrError: null });
   } else {
     await updatePage(pageId, { ocrStatus: "pending", ocrError: null });

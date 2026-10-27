@@ -1,6 +1,7 @@
 import type { FilterId, ImageParams, Quad, Rotation } from "../types";
 import { boxBlur, rgbaToGray } from "./detect";
 import { fullQuad, homography, quadOutputSize } from "./geometry";
+import { straightenImage } from "./straighten";
 
 /** Image RGBA brute (compatible ImageData, utilisable dans un worker ou sous Node). */
 export interface RGBAImage {
@@ -284,10 +285,18 @@ export function outputSizeFor(params: Pick<ImageParams, "quad">, srcW: number, s
   return { quad: q, w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
 }
 
-/** Chaîne complète : recadrage + perspective → rotation → filtre. */
+/**
+ * Version de la chaîne de traitement : une page traitée par une version
+ * antérieure est recalculée quand on relance sa reconnaissance.
+ * 2 : redressement des lignes de texte.
+ */
+export const PROC_VERSION = 2;
+
+/** Chaîne complète : recadrage + perspective → rotation → redressement des lignes → filtre. */
 export function processImage(src: RGBAImage, params: ImageParams, maxSide: number): RGBAImage {
   const { quad, w, h } = outputSizeFor(params, src.width, src.height, maxSide);
   const warped = warpPerspective(src, quad, w, h);
-  const rotated = rotateImage(warped, params.rotation);
-  return applyFilter(rotated, params.filter, params.sharpen);
+  let img = rotateImage(warped, params.rotation);
+  if (params.straighten !== false) img = straightenImage(img);
+  return applyFilter(img, params.filter, params.sharpen);
 }

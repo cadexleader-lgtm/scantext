@@ -1,6 +1,7 @@
 import type { Worker as TessWorker, LoggerMessage } from "tesseract.js";
 import type { LayoutMode, OcrLang, OcrLayout } from "../types";
-import { buildLayout, layoutToText, layoutToTextSpaced, wordStats, type TessBlock } from "./layout";
+import type { Ruling } from "../image/ocr-prep";
+import { buildLayout, layoutToText, wordStats, type TessBlock } from "./layout";
 
 /**
  * Moteur OCR local (Tesseract.js, WebAssembly, dans un Web Worker).
@@ -128,11 +129,100 @@ export function estimateDpi(w: number, h: number): number {
   return Math.round(Math.max(70, Math.min(600, shortSide / 8.27)));
 }
 
+/** Ramène les coordonnées de l'image agrandie à celles de l'image traitée. */
+export function scaleBlocks(blocks: TessBlock[], scale: number): TessBlock[] {
+  if (scale === 1) return blocks;
+  const sb = (b: { x0: number; y0: number; x1: number; y1: number } | undefined) => {
+    if (!b) return;
+    b.x0 /= scale;
+    b.y0 /= scale;
+    b.x1 /= scale;
+    b.y1 /= scale;
+  };
+  for (const bl of blocks) {
+    sb(bl.bbox);
+    for (const p of bl.paragraphs) {
+      sb(p.bbox);
+      for (const l of p.lines) {
+        sb(l.bbox);
+        sb(l.baseline);
+        if (l.rowAttributes) l.rowAttributes = { ...l.rowAttributes, rowHeight: l.rowAttributes.rowHeight / scale };
+        for (const wd of l.words) sb(wd.bbox);
+      }
+    }
+  }
+  return blocks;
+}
+
+export interface RecognizeInput {
+  /** Image à reconnaître (éventuellement agrandie). */
+  blob: Blob;
+  /** Pixel de `blob` = pixel de l'image traitée × scale. */
+  scale: number;
+  dpi: number;
+  rulings?: Ruling[];
+  /** Caractères repérés sur l'image (image traitée), pour vérifier que rien n'a été oublié. */
+  charBoxes?: Int32Array;
+  charH?: number | null;
+}
+
+/**
+ * Caractères repérés sur l'image qu'aucun mot reconnu ne recouvre, regroupés
+ * en zones : le découpage de la page en blocs laisse parfois de côté une
+ * colonne de tableau ou un texte isolé.
+ */
+export function missedCharCount(blocks: TessBlock[], boxes: Int32Array, charH: number): number {
+  const words: [number, number, number, number][] = [];
+  const pad = 0.3 * charH;
+  for (const b of blocks)
+    for (const p of b.paragraphs)
+      for (const l of p.lines)
+        for (const w of l.words) if (w.text.trim()) words.push([w.bbox.x0 - pad, w.bbox.y0 - pad, w.bbox.x1 + pad, w.bbox.y1 + pad]);
+  const missed: [number, number][] = [];
+  for (let i = 0; i < boxes.length; i += 4) {
+    const cx = (boxes[i] + boxes[i + 2]) / 2;
+    const cy = (boxes[i + 1] + boxes[i + 3]) / 2;
+    if (!words.some((w) => cx >= w[0] && cx <= w[2] && cy >= w[1] && cy <= w[3])) missed.push([cx, cy]);
+  }
+  // seuls comptent les caractères qui ont des voisins (un mot), pas les poussières isolées
+  let count = 0;
+  for (const [x, y] of missed) {
+    let n = 0;
+    for (const [x2, y2] of missed) if (Math.abs(x2 - x) <= 2.5 * charH && Math.abs(y2 - y) <= 0.6 * charH && ++n >= 3) break;
+    if (n >= 3) count++;
+  }
+  return count;
+}
+
+/** Ajoute les mots de la seconde passe qui ne recouvrent aucun mot de la première. */
+export function mergeMissedWords(first: TessBlock[], second: TessBlock[]): TessBlock[] {
+  const words = first.flatMap((b) => b.paragraphs.flatMap((p) => p.lines.flatMap((l) => l.words.map((w) => w.bbox))));
+  const inside = (x: number, y: number) => words.some((b) => x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1);
+  const extra: TessBlock[] = [];
+  for (const b of second)
+    for (const p of b.paragraphs)
+      for (const l of p.lines) {
+        const keep = l.words.filter(
+          (w) => w.text.trim() && w.confidence >= 40 && !inside((w.bbox.x0 + w.bbox.x1) / 2, (w.bbox.y0 + w.bbox.y1) / 2),
+        );
+        if (!keep.length) continue;
+        const bbox = {
+          x0: Math.min(...keep.map((w) => w.bbox.x0)),
+          y0: Math.min(...keep.map((w) => w.bbox.y0)),
+          x1: Math.max(...keep.map((w) => w.bbox.x1)),
+          y1: Math.max(...keep.map((w) => w.bbox.y1)),
+        };
+        extra.push({ bbox, paragraphs: [{ bbox, lines: [{ ...l, bbox, words: keep }] }] });
+      }
+  return [...first, ...extra];
+}
+
 export async function recognizeImage(
-  image: Blob,
+  input: RecognizeInput,
   opts: {
     lang: OcrLang;
     layoutMode: LayoutMode;
+    /** Taille de l'image traitée. */
     width: number;
     height: number;
     onProgress?: (p: number) => void;
@@ -148,17 +238,24 @@ export async function recognizeImage(
       await worker.setParameters({
         tessedit_pageseg_mode: (opts.layoutMode === "table" ? "6" : "3") as never,
         preserve_interword_spaces: opts.layoutMode === "table" ? "1" : "0",
-        user_defined_dpi: String(estimateDpi(opts.width, opts.height)),
+        user_defined_dpi: String(input.dpi),
       });
-      return worker.recognize(image, {}, { text: true, blocks: true });
+      const { data } = await worker.recognize(input.blob, {}, { blocks: true });
+      let blocks = scaleBlocks((data.blocks ?? []) as unknown as TessBlock[], input.scale);
+      // seconde passe (texte épars) si des zones de texte n'ont pas été lues
+      if (input.charBoxes && input.charH && missedCharCount(blocks, input.charBoxes, input.charH) >= 6) {
+        onStatus?.("Vérification des zones oubliées…");
+        await worker.setParameters({ tessedit_pageseg_mode: "11" as never, preserve_interword_spaces: "0" });
+        const second = await worker.recognize(input.blob, {}, { blocks: true });
+        blocks = mergeMissedWords(blocks, scaleBlocks((second.data.blocks ?? []) as unknown as TessBlock[], input.scale));
+      }
+      return blocks;
     })();
     job.catch(() => undefined); // évite un rejet non géré si la page est interrompue
     const aborted = new Promise<never>((_, reject) => (abortCurrent = reject));
-    const { data } = await Promise.race([job, aborted]);
-    const blocks = (data.blocks ?? []) as unknown as TessBlock[];
-    const layout = buildLayout(blocks, opts.width, opts.height);
-    let text = opts.layoutMode === "table" ? layoutToTextSpaced(layout) : layoutToText(layout);
-    text = text.trim();
+    const blocks = await Promise.race([job, aborted]);
+    const layout = buildLayout(blocks, opts.width, opts.height, { rulings: input.rulings, mode: opts.layoutMode });
+    const text = layoutToText(layout).trim();
     const stats = wordStats(layout);
     const blank = stats.count === 0 || !text;
     const confidence = blank ? 0 : Math.round(stats.meanConfidence);

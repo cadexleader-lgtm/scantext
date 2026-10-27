@@ -2,6 +2,7 @@ import type { ImageParams, Quad } from "../types";
 import { rgbaToGray } from "./detect";
 import { findPage } from "./edges";
 import { insetQuad, scaleQuad } from "./geometry";
+import { runOcrPrep, type OcrPrepMessage } from "./ocr-prep";
 import { processImage, type RGBAImage } from "./ops";
 
 /**
@@ -135,21 +136,26 @@ export function detectQuad(src: DrawableSource, workSide = 400): Quad | null {
 
 // ------------------------------------------------------------ worker
 
+type WorkerRequest =
+  | { kind: "process"; image: RGBAImage; params: ImageParams; maxSide: number }
+  | { kind: "ocr"; image: RGBAImage };
+type WorkerResult = { image?: RGBAImage; ocr?: OcrPrepMessage };
+
 let worker: Worker | null = null;
 let workerBroken = false;
 let seq = 0;
-const jobs = new Map<number, { resolve: (img: RGBAImage) => void; reject: (e: Error) => void }>();
+const jobs = new Map<number, { resolve: (r: WorkerResult) => void; reject: (e: Error) => void }>();
 
 function getWorker(): Worker | null {
   if (workerBroken) return null;
   if (!worker) {
     try {
       worker = new Worker(new URL("./process.worker.ts", import.meta.url), { type: "module" });
-      worker.onmessage = (e: MessageEvent<{ id: number; ok: boolean; image?: RGBAImage; error?: string }>) => {
+      worker.onmessage = (e: MessageEvent<{ id: number; ok: boolean; error?: string } & WorkerResult>) => {
         const job = jobs.get(e.data.id);
         if (!job) return;
         jobs.delete(e.data.id);
-        if (e.data.ok && e.data.image) job.resolve(e.data.image);
+        if (e.data.ok) job.resolve(e.data);
         else job.reject(new Error(e.data.error || "Échec du traitement de l'image."));
       };
       worker.onerror = () => {
@@ -167,21 +173,46 @@ function getWorker(): Worker | null {
   return worker;
 }
 
-export async function processPixels(image: RGBAImage, params: ImageParams, maxSide: number): Promise<RGBAImage> {
+async function runInWorker(req: WorkerRequest): Promise<WorkerResult | null> {
   const w = getWorker();
-  if (w) {
-    try {
-      return await new Promise<RGBAImage>((resolve, reject) => {
-        const id = ++seq;
-        jobs.set(id, { resolve, reject });
-        w.postMessage({ id, image, params, maxSide }, [image.data.buffer]);
-      });
-    } catch (err) {
-      if (!(err instanceof Error) || err.message !== "worker-failed") throw err;
-      throw new Error("Le traitement d'image a échoué, réessayez.");
-    }
+  if (!w) return null;
+  try {
+    return await new Promise<WorkerResult>((resolve, reject) => {
+      const id = ++seq;
+      jobs.set(id, { resolve, reject });
+      w.postMessage({ id, ...req }, [req.image.data.buffer]);
+    });
+  } catch (err) {
+    if (!(err instanceof Error) || err.message !== "worker-failed") throw err;
+    throw new Error("Le traitement d'image a échoué, réessayez.");
   }
+}
+
+export async function processPixels(image: RGBAImage, params: ImageParams, maxSide: number): Promise<RGBAImage> {
+  const res = await runInWorker({ kind: "process", image, params, maxSide });
+  if (res?.image) return res.image;
   return processImage(image, params, maxSide);
+}
+
+/** Image d'une page prête à être reconnue (agrandie, nettoyée). */
+export interface OcrInput extends Omit<OcrPrepMessage, "png"> {
+  blob: Blob;
+}
+
+export async function prepareOcrInput(procBlob: Blob): Promise<OcrInput> {
+  const src = await decodeImage(procBlob);
+  let pixels: RGBAImage;
+  try {
+    const canvas = drawScaled(src, Number.MAX_SAFE_INTEGER);
+    pixels = readPixels(canvas);
+    releaseCanvas(canvas);
+  } finally {
+    releaseSource(src);
+  }
+  const res = await runInWorker({ kind: "ocr", image: pixels });
+  const out = res?.ocr ?? runOcrPrep(pixels);
+  const { png, ...rest } = out;
+  return { ...rest, blob: new Blob([png as Uint8Array<ArrayBuffer>], { type: "image/png" }) };
 }
 
 export interface ProcessedImage {

@@ -14,10 +14,15 @@ export interface Settings {
   copyReflow: boolean;
   ocrPaused: boolean;
   storageNoticeDismissed: boolean;
+  /** Version des réglages enregistrés (migrations). */
+  version: number;
 }
 
+const SETTINGS_VERSION = 2;
+
 export const DEFAULT_SETTINGS: Settings = {
-  lang: "fra",
+  // français + anglais : les documents mêlent souvent les deux (noms, termes techniques)
+  lang: "fra+eng",
   quickCapture: false,
   imageQuality: "standard",
   defaultFilter: "enhanced",
@@ -25,6 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   copyReflow: false,
   ocrPaused: false,
   storageNoticeDismissed: false,
+  version: SETTINGS_VERSION,
 };
 
 /** Plus grand côté conservé pour les images, en pixels. */
@@ -37,7 +43,12 @@ const listeners = new Set<() => void>();
 function load(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    if (raw) {
+      const stored = JSON.parse(raw) as Partial<Settings>;
+      // v2 : « français + anglais » par défaut (plus juste, mesuré sur des pages réelles)
+      if ((stored.version ?? 1) < 2 && stored.lang === "fra") stored.lang = "fra+eng";
+      return { ...DEFAULT_SETTINGS, ...stored, version: SETTINGS_VERSION };
+    }
   } catch {
     // stockage indisponible (navigation privée…) : réglages par défaut
   }

@@ -4,7 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "public", "e2e/.out", "dev-dist"] },
+  { ignores: ["dist", "public", "e2e/.out", "bench/.out", "dev-dist"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
@@ -16,7 +16,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/**/*.mjs", "e2e/**/*.mjs"],
+    files: ["scripts/**/*.mjs", "e2e/**/*.mjs", "bench/**/*.mjs"],
     extends: [js.configs.recommended],
     languageOptions: { ecmaVersion: 2022, sourceType: "module", globals: { ...globals.node, ...globals.browser } },
   },

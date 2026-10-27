@@ -530,7 +530,7 @@ await test("16. Hors ligne : l'application s'ouvre, documents et OCR disponibles
   await page.waitForURL(/#\/doc\//);
   await waitOcrDone(page, 120_000);
   await page.goto(`${BASE}#/settings`);
-  await page.getByText(/Reconnaissance \(Français\) : disponible hors ligne/).waitFor({ timeout: 10_000 });
+  await page.getByText(/Reconnaissance \(français \+ anglais\) : disponible hors ligne/).waitFor({ timeout: 10_000 });
   await page.getByText(/Interface : disponible hors ligne/).waitFor();
 
   await context.setOffline(true);
@@ -548,6 +548,125 @@ await test("16. Hors ligne : l'application s'ouvre, documents et OCR disponibles
   // export hors ligne (modules pré-cachés)
   const { bytes } = await exportAs(page, "Word (.docx)");
   assert(unzipSync(new Uint8Array(bytes))["word/document.xml"], "export DOCX hors ligne invalide");
+  await context.close();
+});
+
+/** Modifie une page directement dans IndexedDB (pour préparer un cas précis), puis recharge. */
+async function patchDbPage(page, pageId, fnSource) {
+  await page.evaluate(
+    ({ pageId, fnSource }) =>
+      new Promise((resolve, reject) => {
+        const req = indexedDB.open("scantext");
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+          const tx = req.result.transaction("pages", "readwrite");
+          const store = tx.objectStore("pages");
+          const g = store.get(pageId);
+          g.onsuccess = () => store.put(new Function("p", fnSource)(g.result) ?? g.result);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        };
+      }),
+    { pageId, fnSource },
+  );
+  await page.reload();
+}
+
+await test("Tableaux : facture photographiée → cases, case fusionnée, édition, copie, Word, PDF", async () => {
+  const { context, page } = await newPage({ mobile: false });
+  await chooseFiles(page, () => button(page, "Importer des photos").click(), [fx("invoice.jpg")]);
+  await page.waitForURL(/#\/doc\//);
+  await waitOcrDone(page, 180_000);
+  const docId = docIdFromUrl(page);
+  const [p] = await dbPages(page, docId);
+  const rows = p.text.split("\n").filter((l) => l.includes("\t"));
+  const cells = (start) => rows.find((r) => r.trim().startsWith(start))?.split("\t").map((c) => c.trim());
+  assert(rows.length >= 9, `${rows.length} rangées de tableau :\n${p.text}`);
+  const ramette = cells("Ramette");
+  assert(ramette?.length === 4 && ramette[1] === "12" && /4,50/.test(ramette[2]) && /54,00/.test(ramette[3]), `rangée « Ramette » : ${JSON.stringify(ramette)}`);
+  const total = cells("Total hors taxes");
+  assert(total?.length === 4 && !total[1] && !total[2] && /186,70/.test(total[3]), `case fusionnée : ${JSON.stringify(total)}`);
+  const lundi = cells("Lundi");
+  assert(lundi?.length === 3 && /12/.test(lundi[1]) && /18/.test(lundi[2]), `tableau sans traits : ${JSON.stringify(lundi)}`);
+  assert(p.text.indexOf("Facture") < p.text.indexOf("Désignation") && p.text.indexOf("186,70") < p.text.indexOf("Lundi"), "ordre de lecture");
+
+  // grille modifiable case par case
+  await page.goto(`${BASE}#/doc/${docId}/page/${p.id}`);
+  const grid = page.getByRole("region", { name: "Tableau 1" });
+  await grid.waitFor();
+  const qty = grid.getByLabel("Rangée 2, colonne 2");
+  assert((await qty.inputValue()) === "12", "case Quantité");
+  await qty.fill("15");
+  await page.waitForTimeout(1200);
+  const [after] = await dbPages(page, docId);
+  assert(/Ramette papier A4\s*\t15\t/.test(after.text), `case modifiée absente du texte : ${after.text.slice(0, 300)}`);
+  await page.screenshot({ path: join(SHOTS, "table-grid.png"), fullPage: true });
+  // téléphone : le tableau défile dans son cadre, la page ne déborde pas
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.getByRole("radio", { name: "Texte" }).click();
+  await grid.scrollIntoViewIfNeeded();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert(overflow <= 0, `débordement horizontal de ${overflow} px sur téléphone`);
+  await page.screenshot({ path: join(SHOTS, "table-grid-mobile.png") });
+  await page.setViewportSize({ width: 1366, height: 900 });
+
+  // copie : texte à colonnes (tabulations)
+  await page.goto(`${BASE}#/doc/${docId}`);
+  await button(page, "Copier tout").click();
+  await page.getByText(/Texte copié/).waitFor();
+  const clip = await clipboard(page);
+  assert(/Ramette papier A4\s*\t15\t/.test(clip), "presse-papiers sans colonnes");
+
+  // Word : vrai tableau
+  await page.getByRole("button", { name: "Exporter" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Exporter le document" });
+  await dialog.getByText("Word (.docx)", { exact: true }).click();
+  await dialog.getByRole("radio", { name: "Texte simple" }).click();
+  const [download] = await Promise.all([page.waitForEvent("download"), dialog.getByRole("button", { name: "Télécharger" }).click()]);
+  const path = join(ROOT, ".out", "export-tables.docx");
+  await download.saveAs(path);
+  const xml = strFromU8(unzipSync(new Uint8Array(readFileSync(path)))["word/document.xml"]);
+  assert((xml.match(/<w:tbl>/g) ?? []).length === 2, `tableaux Word : ${(xml.match(/<w:tbl>/g) ?? []).length}`);
+  assert(xml.includes("186,70"), "contenu du tableau absent du DOCX");
+
+  // PDF texte : contenu du tableau présent
+  const pdf = await exportAs(page, "PDF du texte");
+  const t = norm((await pdfText(pdf.bytes)).pages.join(" "));
+  assert(t.includes("Ramette papier A4") && t.includes("186,70"), `PDF texte : ${t.slice(0, 200)}`);
+  assert(!page.errors.length, `erreurs console : ${page.errors.join(" | ")}`);
+  await context.close();
+});
+
+await test("Relecture : un mot douteux est montré sur la photo et corrigé en place", async () => {
+  const { context, page } = await newPage({ mobile: false });
+  await chooseFiles(page, () => button(page, "Importer des photos").click(), [pageFile(1)]);
+  await page.waitForURL(/#\/doc\//);
+  await waitOcrDone(page, 120_000);
+  const docId = docIdFromUrl(page);
+  const [p] = await dbPages(page, docId);
+  assert(p.text.includes("budget"), "mot de test absent");
+  // le moteur a lu ce mot avec certitude : on le déclare douteux pour le scénario
+  await patchDbPage(
+    page,
+    p.id,
+    `for (const para of p.layout.paragraphs) for (const l of para.lines) for (const w of l.words) w.c = w.t === "budget" ? 35 : Math.max(w.c, 95); return p;`,
+  );
+  await page.goto(`${BASE}#/doc/${docId}/page/${p.id}`);
+  await page.getByRole("button", { name: "Relire (1)" }).click();
+  const dialog = page.getByRole("dialog", { name: "Relecture des mots douteux" });
+  await dialog.getByRole("img", { name: "Extrait de la photo" }).waitFor();
+  const field = dialog.getByLabel("Correction du mot");
+  assert((await field.inputValue()) === "budget", `mot proposé : ${await field.inputValue()}`);
+  await page.screenshot({ path: join(SHOTS, "review-dialog.png") });
+  await field.fill("budget annuel");
+  await dialog.getByRole("button", { name: "Corriger" }).click();
+  await dialog.getByText("Relecture terminée.").waitFor();
+  await dialog.getByRole("button", { name: "Terminer" }).click();
+  await page.waitForTimeout(1200);
+  const [after] = await dbPages(page, docId);
+  assert(norm(after.text).includes("approuvé le budget annuel prévisionnel"), `texte : ${norm(after.text).slice(0, 200)}`);
+  assert(after.edited, "page non marquée corrigée");
+  assert(!page.errors.length, `erreurs console : ${page.errors.join(" | ")}`);
   await context.close();
 });
 

@@ -4,6 +4,7 @@ import { copyText } from "../lib/clipboard";
 import { downloadBlob } from "../lib/export/download";
 import { updateSettings, useSettings } from "../lib/settings";
 import { assembleText, countWords, safeFileName } from "../lib/text";
+import { hasTable, textToHtml } from "../lib/text-blocks";
 import { toast } from "../lib/toast";
 import type { PageRecord } from "../lib/types";
 import { Button, Dialog, Switch } from "./ui";
@@ -32,7 +33,7 @@ export function CopyAllButton({ pages, docName, className }: { pages: PageRecord
       return;
     }
     try {
-      await copyText(text);
+      await copyText(text, hasTable(text) ? textToHtml(text) : undefined);
       const words = countWords(text).toLocaleString("fr-FR");
       toast.success(
         `Texte copié : ${pages.length} page${pages.length > 1 ? "s" : ""}, ${words} mots.` +

@@ -1,3 +1,4 @@
+import { isTableLine } from "./text-blocks";
 import type { PageRecord } from "./types";
 
 export interface AssembleOptions {
@@ -21,14 +22,21 @@ export function reflowText(text: string): string {
   const paragraphs = text.replace(/\r\n?/g, "\n").split(/\n\s*\n/);
   return paragraphs
     .map((para) => {
-      const lines = para.split("\n").map((l) => l.trim()).filter(Boolean);
+      // les tabulations délimitent les cases d'un tableau : on ne retire que les espaces
+      const lines = para
+        .split("\n")
+        .map((l) => l.replace(/^ +| +$/g, ""))
+        .filter((l) => l.trim());
       let out = "";
       for (const line of lines) {
         if (!out) {
           out = line;
           continue;
         }
-        if (LIST_ITEM.test(line)) {
+        // les rangées d'un tableau restent sur leur ligne
+        if (isTableLine(line) || isTableLine(out.slice(out.lastIndexOf("\n") + 1))) {
+          out += "\n" + line;
+        } else if (LIST_ITEM.test(line)) {
           out += "\n" + line;
         } else if (/[A-Za-zÀ-ÿ]-$/.test(out) && /^\p{Ll}/u.test(line)) {
           out = out.slice(0, -1) + line;
@@ -44,7 +52,7 @@ export function reflowText(text: string): string {
 
 /** Texte d'une page tel qu'il sera copié / exporté. */
 export function pageOutputText(page: Pick<PageRecord, "text">, reflow: boolean): string {
-  const t = page.text.replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+  const t = page.text.replace(/\r\n?/g, "\n").replace(/[ \n]+$/, "");
   return reflow ? reflowText(t) : t;
 }
 

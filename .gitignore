@@ -4,3 +4,4 @@ dist
 public/tesseract
 e2e/.out
 *.tsbuildinfo
+bench/.out

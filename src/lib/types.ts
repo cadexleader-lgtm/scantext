@@ -26,10 +26,33 @@ export interface OcrWord {
 export interface OcrLine {
   b: BBox;
   words: OcrWord[];
+  /** Ligne de base (x0, y0, x1, y1), si connue. */
+  bl?: BBox;
+  /** Hauteur de la ligne (des jambages bas au haut des majuscules), si connue. */
+  rh?: number;
+}
+/** Case d'un tableau (r, c : rangée et colonne de départ ; rs, cs : cases fusionnées). */
+export interface OcrCell {
+  r: number;
+  c: number;
+  rs: number;
+  cs: number;
+  b: BBox;
+  words: OcrWord[];
+}
+export interface OcrTable {
+  b: BBox;
+  nr: number;
+  nc: number;
+  cells: OcrCell[];
+  /** Tableau délimité par des traits (sinon : colonnes déduites des blancs). */
+  ruled: boolean;
 }
 export interface OcrParagraph {
   b: BBox;
+  /** Pour un tableau : une ligne par case, dans l'ordre des cases. */
   lines: OcrLine[];
+  table?: OcrTable;
 }
 /** Structure détectée par l'OCR, en pixels de l'image traitée. */
 export interface OcrLayout {
@@ -53,6 +76,8 @@ export interface ImageParams {
   rotation: Rotation;
   filter: FilterId;
   sharpen: boolean;
+  /** Redresse les lignes de texte penchées ou courbées (absent = oui). */
+  straighten?: boolean;
 }
 
 export interface PageRecord extends ImageParams {
@@ -70,6 +95,8 @@ export interface PageRecord extends ImageParams {
   imageRev: number;
   procW: number;
   procH: number;
+  /** Version de la chaîne de traitement d'image qui a produit l'image traitée. */
+  procVersion?: number;
 
   ocrStatus: OcrStatus;
   ocrError: string | null;

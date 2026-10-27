@@ -70,6 +70,17 @@ export function DocumentScreen({ docId }: { docId: string }) {
     if (ok) for (const p of recognized) await rerunOcr(p.id);
   }
 
+  async function rerunAll() {
+    const recognized = pages.filter((p) => p.textSource !== "pdf" && p.ocrStatus !== "pending" && p.ocrStatus !== "processing");
+    if (!recognized.length) return;
+    const ok = await confirmAction({
+      title: "Relancer toute la reconnaissance ?",
+      message: `Les ${pagesLabel(recognized.length)} seront de nouveau préparées et reconnues avec la dernière version (redressement des lignes, tableaux). Les pages corrigées à la main ne seront pas écrasées : la nouvelle version vous sera proposée.`,
+      confirmLabel: "Relancer",
+    });
+    if (ok) for (const p of recognized) await rerunOcr(p.id);
+  }
+
   async function removePage(page: PageRecord, index: number) {
     const ok = await confirmAction({
       title: `Supprimer la page ${index + 1} ?`,
@@ -213,8 +224,17 @@ export function DocumentScreen({ docId }: { docId: string }) {
                       <Table2 className="size-4" aria-hidden /> Tableaux et formulaires
                     </span>
                   }
-                  description="Garde chaque ligne d'un tableau sur une seule ligne, colonnes séparées par des espaces. À désactiver pour les textes en colonnes (journaux)."
+                  description="Repère aussi les tableaux sans traits et garde chaque rangée sur sa ligne (colonnes séparées par des tabulations). Les tableaux à traits sont reconnus dans tous les cas. À désactiver pour les textes en colonnes (journaux)."
                 />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="mt-2"
+                  icon={<RefreshCw className="size-4" aria-hidden />}
+                  onClick={() => void rerunAll()}
+                >
+                  Relancer toute la reconnaissance
+                </Button>
               </div>
             </details>
           </section>

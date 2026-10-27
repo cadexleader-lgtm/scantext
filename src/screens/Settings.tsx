@@ -17,6 +17,7 @@ export const LANG_OPTIONS: { value: OcrLang; label: string }[] = [
   { value: "eng", label: "Anglais" },
   { value: "fra+eng", label: "Les deux" },
 ];
+const LANG_NAMES: Record<OcrLang, string> = { fra: "français", eng: "anglais", "fra+eng": "français + anglais" };
 export const FILTER_OPTIONS: { value: FilterId; label: string }[] = [
   { value: "enhanced", label: "Document" },
   { value: "gray", label: "Gris" },
@@ -103,7 +104,7 @@ export function SettingsScreen() {
       <PageHeader title="Paramètres" />
       <div className="mx-auto grid max-w-3xl gap-4 px-4 py-4 sm:px-6">
         <Section title="Reconnaissance du texte">
-          <Field label="Langue des nouveaux documents" hint="Modifiable pour chaque document. « Les deux » est plus lent : à réserver aux documents bilingues.">
+          <Field label="Langue des nouveaux documents" hint="Modifiable pour chaque document. « Les deux » (recommandé) lit aussi les mots anglais ; « Français » seul est un peu plus rapide.">
             <Segmented label="Langue" value={s.lang} onChange={(lang) => updateSettings({ lang })} options={LANG_OPTIONS} className="w-full" />
           </Field>
         </Section>
@@ -154,7 +155,7 @@ export function SettingsScreen() {
               Interface : <strong>{offline?.appShell ? "disponible hors ligne" : "pas encore disponible hors ligne"}</strong>
             </li>
             <li>
-              Reconnaissance ({LANG_OPTIONS.find((l) => l.value === s.lang)?.label}) :{" "}
+              Reconnaissance ({LANG_NAMES[s.lang]}) :{" "}
               <strong>{offline?.ocr ? "disponible hors ligne" : "nécessite une connexion la première fois"}</strong>
             </li>
           </ul>

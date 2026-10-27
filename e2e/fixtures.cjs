@@ -74,6 +74,30 @@ async function shot(browser, html, file, { width = 1240, height = 1754, type = "
     </body></html>`;
   await shot(browser, fabricHtml(1200, 1600), path.join(OUT, "photo-fabric.jpg"), { width: 1200, height: 1600, type: "jpeg", quality: 88 });
 
+  // facture photographiée légèrement de travers : tableau à traits (case fusionnée) + tableau sans traits
+  const invoiceHtml = `<html><body style="margin:0;width:1400px;height:1900px;overflow:hidden;background:#8d8a84">
+    <div style="position:absolute;left:90px;top:80px;width:1220px;height:1720px;background:#fdfdfb;transform:rotate(1.4deg);
+      box-shadow:0 10px 30px rgba(0,0,0,.4);font:26px 'Times New Roman',serif;color:#141414;padding:90px 100px;box-sizing:border-box">
+      <h1 style="font-size:40px;margin:0 0 26px">Facture n° 2026-118</h1>
+      <p style="margin:0 0 34px">Le présent document récapitule les prestations réalisées en octobre.</p>
+      <table style="border-collapse:collapse;width:100%">
+        <tr>${["Désignation", "Quantité", "Prix unitaire", "Total"].map((t) => `<th style="border:2px solid #222;padding:14px;text-align:left">${t}</th>`).join("")}</tr>
+        ${[["Ramette papier A4", "12", "4,50 €", "54,00 €"], ["Cartouche encre noire", "3", "29,90 €", "89,70 €"], ["Classeur à levier", "20", "2,15 €", "43,00 €"]]
+          .map((r) => `<tr>${r.map((t) => `<td style="border:2px solid #222;padding:14px">${t}</td>`).join("")}</tr>`)
+          .join("")}
+        <tr><td colspan="3" style="border:2px solid #222;padding:14px">Total hors taxes</td><td style="border:2px solid #222;padding:14px">186,70 €</td></tr>
+      </table>
+      <p style="margin:50px 0 20px">Horaires du service client :</p>
+      <div style="display:grid;grid-template-columns:260px 260px 260px;row-gap:14px;margin-left:20px">
+        ${[["Lundi", "9 h - 12 h", "14 h - 18 h"], ["Mardi", "9 h - 12 h", "14 h - 17 h"], ["Mercredi", "Fermé", "14 h - 18 h"], ["Jeudi", "9 h - 12 h", "14 h - 18 h"]]
+          .flat()
+          .map((t) => `<span>${t}</span>`)
+          .join("")}
+      </div>
+      <p style="margin-top:50px">Merci de régler le montant total avant le 30 novembre 2026.</p>
+    </div></body></html>`;
+  await shot(browser, invoiceHtml, path.join(OUT, "invoice.jpg"), { width: 1400, height: 1900, type: "jpeg", quality: 90 });
+
   // flux caméra simulé (MJPEG = images JPEG concaténées), format portrait
   await shot(browser, photoHtml(960, 1280), path.join(OUT, "camera-frame.jpg"), { width: 960, height: 1280, type: "jpeg", quality: 92 });
   const frame = fs.readFileSync(path.join(OUT, "camera-frame.jpg"));

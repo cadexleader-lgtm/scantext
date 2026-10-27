@@ -1,6 +1,9 @@
-import type { OcrLayout, OcrParagraph } from "../types";
+import type { OcrLayout, OcrLine, OcrParagraph } from "../types";
 import { assembleText, pageOutputText, reflowText } from "../text";
-import { lineText } from "../ocr/layout";
+import { alignTokens, layoutWords, tokenize } from "../ocr/align";
+import { baselineAt, lineText } from "../ocr/layout";
+import { tableToText } from "../ocr/tables";
+import { parseBlocks } from "../text-blocks";
 
 /**
  * Génération des fichiers exportés. Les bibliothèques (docx, pdf-lib) ne sont
@@ -45,6 +48,8 @@ const median = (v: number[]) => {
 
 export interface ApproxParagraph {
   lines: string[];
+  /** Tableau : rangées de cases. */
+  table?: string[][];
   sizePt: number;
   bold: boolean;
   align: "left" | "center" | "right";
@@ -67,7 +72,7 @@ export function approximateLayout(layout: OcrLayout, reflow: boolean): ApproxPar
   const width = Math.max(1, maxX - minX);
   let prevBottom: number | null = null;
   return paras.map((p) => {
-    const ratio = lineH(p) / bodyH;
+    const ratio = p.table ? 1 : lineH(p) / bodyH;
     const leftGap = p.b[0] - minX;
     const rightGap = maxX - p.b[2];
     let align: ApproxParagraph["align"] = "left";
@@ -75,8 +80,9 @@ export function approximateLayout(layout: OcrLayout, reflow: boolean): ApproxPar
     else if (leftGap > 0.3 * width && rightGap < 0.05 * width) align = "right";
     const gap = prevBottom === null ? 0 : Math.max(0, p.b[1] - prevBottom);
     prevBottom = p.b[3];
-    const lines = p.lines.map(lineText);
+    const lines = p.table ? [] : p.lines.map(lineText);
     return {
+      table: p.table ? tableToText(p.table).split("\n").map((r) => r.split("\t")) : undefined,
       lines: reflow ? [reflowText(lines.join("\n"))] : lines,
       sizePt: Math.max(8, Math.min(28, Math.round(11 * Math.min(ratio, 2.6)))),
       bold: ratio > 1.35,
@@ -91,10 +97,37 @@ const A4_TWIPS = { width: 11906, height: 16838, margin: 1134 }; // marges 2 cm
 const CONTENT_PX = 600; // largeur utile ≈ 16 cm à 96 dpi
 
 export async function buildDocx(pages: ExportPage[], opts: ExportOptions): Promise<Blob> {
-  const { AlignmentType, Document, ImageRun, Packer, Paragraph, TextRun } = await import("docx");
-  type Para = InstanceType<typeof Paragraph>;
+  const { AlignmentType, BorderStyle, Document, ImageRun, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } = await import("docx");
+  type Para = InstanceType<typeof Paragraph> | InstanceType<typeof Table>;
   const children: Para[] = [];
   const alignOf = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT } as const;
+  const line = { style: BorderStyle.SINGLE, size: 4, color: "8A8A8A" };
+  /** Vrai tableau Word (colonnes de largeur proportionnelle à leur contenu). */
+  const wordTable = (rows: string[][]) => {
+    const cols = Math.max(...rows.map((r) => r.length));
+    const weight = Array.from({ length: cols }, (_, c) => Math.max(4, ...rows.map((r) => Math.min(40, (r[c] ?? "").length))));
+    const total = weight.reduce((a, b) => a + b, 0);
+    const usable = A4_TWIPS.width - 2 * A4_TWIPS.margin;
+    const widths = weight.map((w) => Math.round((usable * w) / total));
+    return new Table({
+      width: { size: usable, type: WidthType.DXA },
+      columnWidths: widths,
+      borders: { top: line, bottom: line, left: line, right: line, insideHorizontal: line, insideVertical: line },
+      rows: rows.map(
+        (r) =>
+          new TableRow({
+            children: widths.map(
+              (w, c) =>
+                new TableCell({
+                  width: { size: w, type: WidthType.DXA },
+                  margins: { top: 40, bottom: 40, left: 80, right: 80 },
+                  children: [new Paragraph({ children: [new TextRun({ text: r[c] ?? "" })] })],
+                }),
+            ),
+          }),
+      ),
+    });
+  };
 
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
@@ -103,6 +136,10 @@ export async function buildDocx(pages: ExportPage[], opts: ExportOptions): Promi
 
     if (opts.docxMode === "layout" && page.layout && !page.edited) {
       for (const ap of approximateLayout(page.layout, opts.reflow)) {
+        if (ap.table) {
+          pageParas.push(wordTable(ap.table), new Paragraph({ spacing: { after: 60 }, children: [] }));
+          continue;
+        }
         pageParas.push(
           new Paragraph({
             alignment: alignOf[ap.align],
@@ -113,13 +150,15 @@ export async function buildDocx(pages: ExportPage[], opts: ExportOptions): Promi
         );
       }
     } else {
-      const text = pageOutputText(page, opts.reflow);
-      for (const block of text.split(/\n\s*\n/)) {
-        if (!block.trim()) continue;
+      for (const block of parseBlocks(pageOutputText(page, opts.reflow))) {
+        if (block.kind === "table") {
+          pageParas.push(wordTable(block.rows), new Paragraph({ spacing: { after: 100 }, children: [] }));
+          continue;
+        }
         pageParas.push(
           new Paragraph({
             spacing: { after: 160 },
-            children: block.split("\n").map((line, k) => new TextRun({ text: line, break: k > 0 ? 1 : 0 })),
+            children: block.lines.map((l, k) => new TextRun({ text: l, break: k > 0 ? 1 : 0 })),
           }),
         );
       }
@@ -154,10 +193,8 @@ export async function buildDocx(pages: ExportPage[], opts: ExportOptions): Promi
 
     if (!pageParas.length) pageParas.push(new Paragraph({ children: [] }));
     if (pageBreak) {
-      // la première ligne de chaque page scannée commence une nouvelle page Word
-      const first = pageParas[0];
-      pageParas[0] = new Paragraph({ pageBreakBefore: true, children: [] });
-      pageParas.splice(1, 0, first);
+      // chaque page scannée commence une nouvelle page Word
+      pageParas.unshift(new Paragraph({ pageBreakBefore: true, children: [] }));
     }
     children.push(...pageParas);
   }
@@ -195,6 +232,10 @@ export function makeSanitizer(font: PdfFont): (s: string) => string {
   return (s: string) => {
     let out = "";
     for (const ch of s.normalize("NFC")) {
+      if (ch === "\n" || ch === "\t") {
+        out += ch;
+        continue;
+      }
       let r = cache.get(ch);
       if (r === undefined) {
         const candidate = fallback[ch] ?? ch;
@@ -264,20 +305,44 @@ export async function buildTextPdf(pages: ExportPage[], opts: ExportOptions): Pr
     page = pdf.addPage([W, H]);
     y = H - M;
   };
+  const ink = rgb(0.07, 0.07, 0.1);
+  const border = rgb(0.6, 0.6, 0.63);
+  const drawTable = (rows: string[][]) => {
+    const pad = 4;
+    const cols = Math.max(...rows.map((r) => r.length));
+    const natural = Array.from({ length: cols }, (_, c) => Math.max(30, ...rows.map((r) => font.widthOfTextAtSize(r[c] ?? "", size) + 2 * pad)));
+    const sum = natural.reduce((a, b) => a + b, 0);
+    const avail = W - 2 * M;
+    const widths = sum <= avail ? natural : natural.map((n) => (n / sum) * avail);
+    for (const r of rows) {
+      const cells = widths.map((w, c) => wrapLine(r[c] ?? "", font, size, w - 2 * pad));
+      const rowH = Math.max(...cells.map((l) => l.length)) * lh + 2 * pad - (lh - size);
+      if (y - rowH < M) newPage();
+      let x = M;
+      cells.forEach((lines, c) => {
+        page.drawRectangle({ x, y: y - rowH, width: widths[c], height: rowH, borderColor: border, borderWidth: 0.6 });
+        lines.forEach((l, k) => page.drawText(l, { x: x + pad, y: y - pad - size - k * lh + 2, size, font, color: ink }));
+        x += widths[c];
+      });
+      y -= rowH;
+    }
+    y -= lh * 0.4;
+  };
   pages.forEach((p, i) => {
     if (opts.separators) {
       if (i > 0) newPage();
       page.drawText(sanitize(`Page ${i + 1}`), { x: M, y: H - 34, size: 8, font, color: rgb(0.55, 0.55, 0.6) });
     }
-    const text = sanitize(pageOutputText(p, opts.reflow));
-    const blocks = text.split(/\n\s*\n/);
-    blocks.forEach((block, bi) => {
-      if (!block.trim()) return;
+    parseBlocks(sanitize(pageOutputText(p, opts.reflow))).forEach((block, bi) => {
       if (bi > 0 || (!opts.separators && i > 0)) y -= lh * 0.6;
-      for (const raw of block.split("\n")) {
+      if (block.kind === "table") {
+        drawTable(block.rows);
+        return;
+      }
+      for (const raw of block.lines) {
         for (const line of wrapLine(raw, font, size, W - 2 * M)) {
           if (y < M) newPage();
-          page.drawText(line, { x: M, y: y - size, size, font, color: rgb(0.07, 0.07, 0.1) });
+          page.drawText(line, { x: M, y: y - size, size, font, color: ink });
           y -= lh;
         }
       }
@@ -286,14 +351,95 @@ export async function buildTextPdf(pages: ExportPage[], opts: ExportOptions): Pr
   return new Blob([(await pdf.save()) as Uint8Array<ArrayBuffer>], { type: "application/pdf" });
 }
 
+export interface PlacedWord {
+  text: string;
+  /** Boîte du mot (pixels de l'image). */
+  x0: number;
+  x1: number;
+  /** Ligne de base et taille des caractères (pixels de l'image). */
+  baseline: number;
+  size: number;
+  /** Mots d'une même ligne : même valeur. */
+  line: number;
+}
+
+/**
+ * Position de chaque mot du texte courant sur l'image : le texte (corrigé ou
+ * non) est aligné mot à mot sur les mots reconnus, si bien qu'un mot corrigé
+ * garde l'emplacement exact du mot d'origine. Un mot ajouté à la main est
+ * rattaché au mot reconnu qui le précède.
+ */
+export function placeWords(text: string, layout: OcrLayout): PlacedWord[] {
+  const refs = layoutWords(layout);
+  const tokens = tokenize(text);
+  const match = alignTokens(
+    tokens.map((t) => t.text),
+    refs.map((r) => r.word.t),
+  );
+  const texts: string[][] = refs.map(() => []);
+  let pending: string[] = [];
+  let last = -1;
+  tokens.forEach((t, i) => {
+    const k = match[i];
+    if (k >= 0) {
+      texts[k].push(...pending, t.text);
+      pending = [];
+      last = k;
+    } else if (last >= 0) texts[last].push(t.text);
+    else pending.push(t.text);
+  });
+  if (pending.length && refs.length) texts[0].unshift(...pending);
+  const heights = refs.map((r) => r.word.b[3] - r.word.b[1]).sort((a, b) => a - b);
+  const medH = heights[Math.floor(heights.length / 2)] || 10;
+  const lineIds = new Map<OcrLine, number>();
+  const out: PlacedWord[] = [];
+  refs.forEach((r, k) => {
+    if (!texts[k].length) return; // mot supprimé du texte
+    const w = r.word;
+    let baseline: number;
+    let size: number;
+    let line: number;
+    if (r.line) {
+      if (!lineIds.has(r.line)) lineIds.set(r.line, lineIds.size);
+      line = lineIds.get(r.line)!;
+      const lh = r.line.rh ?? r.line.b[3] - r.line.b[1];
+      // jambages compris, les lettres occupent ≈ 93 % du corps de la police
+      size = lh / 0.93;
+      baseline = r.line.bl ? baselineAt(r.line.bl, w.b[0]) : r.line.b[3] - 0.2 * size;
+    } else {
+      // mot de tableau : estimation à partir de sa propre boîte
+      line = 100_000 + k;
+      size = Math.max(w.b[3] - w.b[1], medH) / 0.72;
+      baseline = w.b[3] - 0.12 * size;
+    }
+    out.push({ text: texts[k].join(" "), x0: w.b[0], x1: w.b[2], baseline, size, line });
+  });
+  return out;
+}
+
 /**
  * PDF recherchable : l'image de chaque page, avec par-dessus une couche de
- * texte invisible (mode de rendu 3) placée à l'emplacement des mots reconnus.
- * Le texte est sélectionnable et trouvable avec Ctrl+F dans les lecteurs PDF.
+ * texte invisible placée exactement sur les mots de l'image : chaque mot a la
+ * largeur du mot photographié (étirement horizontal), suivi d'une espace qui
+ * va jusqu'au mot suivant. Sélection, copie et recherche (Ctrl+F) tombent donc
+ * sur le bon mot de la photo.
  */
 export async function buildSearchablePdf(pages: ExportPage[], opts: ExportOptions): Promise<Blob> {
   const lib = await import("pdf-lib");
-  const { PDFDocument, StandardFonts, popGraphicsState, pushGraphicsState, setTextRenderingMode, TextRenderingMode } = lib;
+  const {
+    PDFDocument,
+    StandardFonts,
+    beginText,
+    endText,
+    popGraphicsState,
+    pushGraphicsState,
+    setCharacterSqueeze,
+    setFontAndSize,
+    setTextMatrix,
+    setTextRenderingMode,
+    showText,
+    TextRenderingMode,
+  } = lib;
   const pdf = await PDFDocument.create();
   pdf.setTitle(opts.title);
   pdf.setLanguage("fr-FR");
@@ -315,42 +461,42 @@ export async function buildSearchablePdf(pages: ExportPage[], opts: ExportOption
       const img = blob.type === "image/png" ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
       page.drawImage(img, { x: 0, y: 0, width: pw, height: ph });
     }
-    page.pushOperators(pushGraphicsState(), setTextRenderingMode(TextRenderingMode.Invisible));
-    const drawFitted = (text: string, x0: number, y0: number, x1: number, y1: number) => {
-      const t = sanitize(text);
+    const words = p.layout && p.layout.paragraphs.length ? placeWords(p.text, p.layout) : approximatePlacement(p.text, iw, ih);
+    if (!words.length) continue;
+    const key = page.node.newFontDictionary(font.name, font.ref);
+    const ops = [pushGraphicsState(), beginText(), setTextRenderingMode(TextRenderingMode.Invisible)];
+    words.forEach((wd, k) => {
+      const next = words[k + 1];
+      const sameLine = next && next.line === wd.line && next.x0 > wd.x0;
+      const t = sanitize(sameLine ? `${wd.text} ` : wd.text);
       if (!t.trim()) return;
-      const boxW = Math.max(1, (x1 - x0) * s);
-      const boxH = Math.max(1, (y1 - y0) * s);
-      const unit = font.widthOfTextAtSize(t, 1) || 1;
-      const size = Math.max(boxH * 0.5, Math.min(boxW / unit, boxH * 1.6));
-      page.drawText(t, { x: x0 * s, y: ph - y1 * s + boxH * 0.18, size, font });
-    };
-    if (p.layout && !p.edited) {
-      for (const para of p.layout.paragraphs)
-        for (const line of para.lines)
-          line.words.forEach((wd, k) => {
-            const spaced = k < line.words.length - 1 ? `${wd.t} ` : wd.t;
-            const next = line.words[k + 1];
-            drawFitted(spaced, wd.b[0], wd.b[1], next ? next.b[0] : wd.b[2], wd.b[3]);
-          });
-    } else {
-      // texte corrigé : chaque ligne est placée sur une ligne détectée (position approchée)
-      const textLines = p.text.split("\n").filter((l) => l.trim());
-      const ocrLines = p.layout ? p.layout.paragraphs.flatMap((pa) => pa.lines.map((l) => l.b)) : [];
-      const step = ocrLines.length > 1 ? (ocrLines[ocrLines.length - 1][1] - ocrLines[0][1]) / (ocrLines.length - 1) : ih / 50;
-      const left = ocrLines.length ? Math.min(...ocrLines.map((b) => b[0])) : iw * 0.08;
-      const right = ocrLines.length ? Math.max(...ocrLines.map((b) => b[2])) : iw * 0.92;
-      textLines.forEach((line, k) => {
-        const b = ocrLines[k];
-        if (b) drawFitted(line, b[0], b[1], b[2], b[3]);
-        else {
-          const last = ocrLines[ocrLines.length - 1];
-          const top = (last ? last[3] : ih * 0.06) + (k - ocrLines.length) * step + step * 0.2;
-          drawFitted(line, left, top, right, top + step * 0.7);
-        }
-      });
-    }
-    page.pushOperators(popGraphicsState());
+      const size = Math.max(1, wd.size * s);
+      const natural = font.widthOfTextAtSize(t, size);
+      const target = ((sameLine ? next.x0 : wd.x1) - wd.x0) * s;
+      const squeeze = natural > 0 ? Math.max(5, Math.min(1000, (100 * target) / natural)) : 100;
+      ops.push(
+        setFontAndSize(key, size),
+        setCharacterSqueeze(squeeze),
+        setTextMatrix(1, 0, 0, 1, wd.x0 * s, ph - wd.baseline * s),
+        showText(font.encodeText(t)),
+      );
+    });
+    ops.push(endText(), popGraphicsState());
+    page.pushOperators(...ops);
   }
   return new Blob([(await pdf.save()) as Uint8Array<ArrayBuffer>], { type: "application/pdf" });
+}
+
+/** Sans mots reconnus (texte saisi ou issu d'un PDF) : lignes réparties sur la page. */
+function approximatePlacement(text: string, iw: number, ih: number): PlacedWord[] {
+  const lines = text.split("\n").filter((l) => l.trim());
+  const step = Math.min(ih / 40, (ih * 0.88) / Math.max(1, lines.length));
+  return lines.map((l, k) => ({
+    text: l.replace(/\t/g, " "),
+    x0: iw * 0.08,
+    x1: iw * 0.08 + Math.min(iw * 0.84, l.length * step * 0.5),
+    baseline: ih * 0.06 + (k + 0.8) * step,
+    size: step * 0.8,
+    line: k,
+  }));
 }

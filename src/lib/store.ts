@@ -1,4 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
+import { PROC_VERSION } from "./image/ops";
 import * as db from "./db";
 import { newId } from "./id";
 import { getSettings } from "./settings";
@@ -320,6 +321,7 @@ export function makePageRecord(docId: string, input: NewPageInput): PageRecord {
     imageRev: input.processed ? 1 : 0,
     procW: input.processed?.w ?? 0,
     procH: input.processed?.h ?? 0,
+    procVersion: input.processed ? PROC_VERSION : undefined,
     ocrStatus: usePdf ? "done" : "pending",
     ocrError: null,
     ocrConfidence: usePdf ? 100 : null,
@@ -405,6 +407,7 @@ export async function savePageImage(
     imageRev: page.imageRev + 1,
     procW: processed.w,
     procH: processed.h,
+    procVersion: PROC_VERSION,
     updatedAt: Date.now(),
   };
   await persist(() =>
@@ -424,6 +427,7 @@ export async function savePageImage(
     imageRev: next.imageRev,
     procW: processed.w,
     procH: processed.h,
+    procVersion: PROC_VERSION,
     updatedAt: next.updatedAt,
   };
   setState({ ...state, pages: { ...state.pages, [pageId]: merged } });

@@ -1,10 +1,12 @@
-import { forwardRef, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCheck, Loader2, RefreshCw } from "lucide-react";
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, CheckCheck, Loader2, RefreshCw, SpellCheck2 } from "lucide-react";
 import { markVerified, rerunOcr, resolveOcrConflict, useProcessing } from "../lib/ocr/queue";
 import { useSettings } from "../lib/settings";
 import { setPageText } from "../lib/store";
 import type { PageRecord } from "../lib/types";
 import { StatusBadge } from "./common";
+import { ReviewDialog, reviewItems } from "./ReviewDialog";
+import { PageTables } from "./TableGrid";
 import { Button } from "./ui";
 import { cn } from "./ui/cn";
 
@@ -60,6 +62,12 @@ export function ConflictBanner({ page }: { page: PageRecord }) {
 export function PageStatusLine({ page, index }: { page: PageRecord; index: number }) {
   const proc = useProcessing();
   const busy = page.ocrStatus === "processing" && proc.ocrPageId === page.id;
+  const [reviewing, setReviewing] = useState(false);
+  const toReview = useMemo(
+    () => (page.textSource === "ocr" && page.layout && page.imageStatus === "ready" ? reviewItems(page).length : 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dépend seulement du texte et des mots reconnus
+    [page.text, page.layout, page.textSource, page.imageStatus],
+  );
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <span className="font-semibold text-ink">Page {index + 1}</span>
@@ -72,6 +80,18 @@ export function PageStatusLine({ page, index }: { page: PageRecord; index: numbe
       )}
       {page.edited && <span className="text-muted">· corrigée</span>}
       <span className="ml-auto flex gap-1">
+        {toReview > 0 && page.ocrStatus !== "processing" && (
+          <Button
+            size="sm"
+            variant="subtle"
+            icon={<SpellCheck2 className="size-4" aria-hidden />}
+            onClick={() => setReviewing(true)}
+            title="Comparer les mots douteux avec la photo, un par un"
+          >
+            Relire ({toReview})
+          </Button>
+        )}
+        <ReviewDialog page={page} open={reviewing} onClose={() => setReviewing(false)} />
         {page.ocrStatus === "review" && page.pendingText === null && (
           <Button size="sm" variant="ghost" icon={<CheckCheck className="size-4" aria-hidden />} onClick={() => void markVerified(page.id)}>
             Vérifié
@@ -94,7 +114,7 @@ export const PageTextBlock = forwardRef<HTMLTextAreaElement, { page: PageRecord;
     const waiting = (page.ocrStatus === "pending" || page.ocrStatus === "processing") && !page.text;
     const failed = page.ocrStatus === "error" || page.imageStatus === "error";
     return (
-      <section className={className} aria-label={`Texte de la page ${index + 1}`}>
+      <section className={cn("min-w-0", className)} aria-label={`Texte de la page ${index + 1}`}>
         {header && (
           <div className="mb-2">
             <PageStatusLine page={page} index={index} />
@@ -137,6 +157,7 @@ export const PageTextBlock = forwardRef<HTMLTextAreaElement, { page: PageRecord;
             )}
           />
         )}
+        {!waiting && <PageTables page={page} />}
       </section>
     );
   },

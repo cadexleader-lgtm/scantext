@@ -3,7 +3,21 @@
  * Doit être appelé directement depuis un geste de l'utilisateur (clic).
  * @throws si aucune méthode n'a fonctionné
  */
-export async function copyText(text: string): Promise<"clipboard" | "legacy"> {
+export async function copyText(text: string, html?: string): Promise<"clipboard" | "legacy"> {
+  // texte + HTML : un tableau collé dans Word, Docs ou un tableur garde ses cases
+  if (html && typeof ClipboardItem !== "undefined" && navigator.clipboard?.write && window.isSecureContext) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/plain": new Blob([text], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return "clipboard";
+    } catch {
+      // format riche refusé : copie du texte seul
+    }
+  }
   if (navigator.clipboard?.writeText && window.isSecureContext) {
     try {
       await navigator.clipboard.writeText(text);

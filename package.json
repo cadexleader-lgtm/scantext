@@ -16,7 +16,8 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "e2e": "node e2e/run.mjs"
+    "e2e": "node e2e/run.mjs",
+    "bench": "node bench/run.mjs"
   },
   "dependencies": {
     "docx": "^9.14.0",

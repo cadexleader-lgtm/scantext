@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Crop, RotateCcw, RotateCw, ScanLine, Sparkles } from "lucide-react";
+import { AlignJustify, Crop, RotateCcw, RotateCw, ScanLine, Sparkles } from "lucide-react";
 import { canvasToBlob, decodeImage, detectQuad, drawScaled, releaseCanvas, releaseSource, renderPreview } from "../lib/image/pipeline";
 import { fullQuad } from "../lib/image/geometry";
 import type { FilterId, ImageParams, Quad, Rotation } from "../lib/types";
@@ -137,7 +137,7 @@ export function AdjustControls({
             options={FILTER_OPTIONS}
             className={cn("w-full", dark && "bg-white/10 [&_[aria-checked=false]]:text-white/80")}
           />
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <Button size="sm" variant={v} icon={<Crop className="size-4" aria-hidden />} onClick={onToggleCrop}>
               Recadrer
             </Button>
@@ -147,6 +147,8 @@ export function AdjustControls({
             <Button size="sm" variant={v} icon={<RotateCw className="size-4" aria-hidden />} onClick={() => onChange({ ...params, rotation: rotate(params.rotation, 90) })} aria-label="Pivoter à droite">
               <span className="max-sm:sr-only">Droite</span>
             </Button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
             <Button
               size="sm"
               variant={params.sharpen ? "subtle" : v}
@@ -155,6 +157,16 @@ export function AdjustControls({
               onClick={() => onChange({ ...params, sharpen: !params.sharpen })}
             >
               Netteté
+            </Button>
+            <Button
+              size="sm"
+              variant={params.straighten !== false ? "subtle" : v}
+              aria-pressed={params.straighten !== false}
+              title="Redresse automatiquement les lignes de texte penchées ou courbées"
+              icon={<AlignJustify className="size-4" aria-hidden />}
+              onClick={() => onChange({ ...params, straighten: params.straighten === false })}
+            >
+              Lignes droites
             </Button>
           </div>
         </>
